@@ -88,3 +88,22 @@ void pgm_gaussFilter(PGM *pgm, PGM *pgm_filtered, int MASK_SIZE, float SIGMA) {
     }
     free(mask);
 }
+
+void pgm_free(PGM *pgm) {
+    if (pgm == NULL) return;
+    if (pgm->image != NULL) {
+        free(pgm->image);
+        pgm->image = NULL;
+    }
+    free(pgm);
+}
+
+PGM* pgm_copy(PGM* pgm) {
+    PGM *pgm1 = (PGM *)malloc(sizeof(PGM));
+    pgm1->image = (unsigned char *)malloc(pgm->width * pgm->height);
+    pgm1->width = pgm->width;
+    pgm1->height = pgm->height;
+    pgm1->maxval = pgm->maxval;
+    memcpy(pgm1->image, pgm->image, pgm->width * pgm->height);
+    return pgm1;
+}

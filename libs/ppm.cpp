@@ -13,18 +13,18 @@
     int i = x + y*ppm->width;
     ppm->image[3*i] = c.r;
     ppm->image[3*i + 1] = c.g;
-    ppm->image[3*i + 2] = c.b;  
+    ppm->image[3*i + 2] = c.b;
 }
 
 /*
  * Get pel (pixel element) from ppm image.
  */
- pel ppm_get(PPM* ppm, int x, int y) {     
+ pel ppm_get(PPM* ppm, int x, int y) {
     if (x < 0 || x >= ppm->width || y < 0 || y > ppm->height) {
         printf("Index out of bounds in ppm_get(%d, %d)\n", x, y);
         exit(EXIT_FAILURE);
     }
-    
+
     pel p;
     int i = x + y*ppm->width;
     p.r = ppm->image[3*i];
@@ -81,6 +81,17 @@ PPM *ppm_make(int width, int height, pel c) {
     return ppm;
 }
 
+void ppm_free(PPM *ppm) {
+    if (ppm == NULL) return;
+
+    if (ppm->image != NULL) {
+        free(ppm->image);    // Libera l'array dei dati RGB
+        ppm->image = NULL;
+    }
+
+    free(ppm);
+}
+
 /*
 * Create a new ppm image (width x height) with random pixel values.
 */
@@ -129,7 +140,7 @@ PPM *ppm_rand(int width, int height) {
 
 /*
  * Flip horizontally in place by swapping column elements.
- */   
+ */
  void ppm_flipH(PPM* ppm) {
     for (int x = 0; x < ppm->width/2; x++) {
         for (int y = 0; y < ppm->height; y++) {
@@ -197,7 +208,7 @@ float *gaussMask(int MASK_SIZE, float SIGMA) {
     float sum = 0.0;
     int RADIUS = MASK_SIZE / 2;
     float sigma2 = 2.0 * SIGMA * SIGMA;
-    
+
     for (int i = 0; i < MASK_SIZE; i++) {
         for (int j = 0; j < MASK_SIZE; j++) {
             int x = i - RADIUS;
@@ -206,7 +217,7 @@ float *gaussMask(int MASK_SIZE, float SIGMA) {
             sum += mask[i*MASK_SIZE+j];
         }
     }
-    
+
     for (int i = 0; i < MASK_SIZE; i++) {
         for (int j = 0; j < MASK_SIZE; j++) {
             mask[i*MASK_SIZE+j] /= sum;
@@ -217,7 +228,7 @@ float *gaussMask(int MASK_SIZE, float SIGMA) {
 
 /*
 * Gaussian filter for ppm images
-*/     
+*/
 void ppm_gaussFilter(PPM* ppm, PPM *ppm_filtered, int MASK_SIZE, float SIGMA) {
     float *mask = gaussMask(MASK_SIZE, SIGMA);
     for (int x = 0; x < ppm->width; x++) {
@@ -248,11 +259,11 @@ pel ppm_gaussKernel(PPM *ppm, int x, int y, int width, int height, int MASK_SIZE
         }
     }
     return {(color)R, (color)G, (color)B};
-}   
+}
 
 /*
 * Blurring filter for ppm images
-*/     
+*/
 void ppm_blur(PPM* ppm, PPM *ppm_filtered, int KERNEL_SIZE) {
     for (int x = 0; x < ppm->width; x++) {
         for (int y = 0; y < ppm->height; y++) {
@@ -263,7 +274,7 @@ void ppm_blur(PPM* ppm, PPM *ppm_filtered, int KERNEL_SIZE) {
 }
 
 /*
-* Blur kernel 
+* Blur kernel
 */
 pel ppm_blurKernel(PPM *ppm, int x, int y, int width, int height, int KERNEL_SIZE) {
     float R=0, G=0, B=0;
@@ -284,16 +295,16 @@ pel ppm_blurKernel(PPM *ppm, int x, int y, int width, int height, int KERNEL_SIZ
     }
     pel p_fil = {(color)(R/numPixels), (color)(G/numPixels), (color)(B/numPixels)};
     return p_fil;
-}   
+}
 
-/* 
+/*
 * RGB histogram of the PPM image
 */
 int *ppm_histogram(PPM *ppm) {
     int *histogram = (int *)malloc(3* 256 * sizeof(int));
-    
+
     // initialize histogram
-    for (int x = 0; x < 3 * 256; x++) 
+    for (int x = 0; x < 3 * 256; x++)
         histogram[x] = 0;
 
     // count the number of pixels for each color
@@ -315,18 +326,18 @@ void ppm_save_histogram(int *histogram, const char *filename) {
     int HEIGHT = 500;     //  image height
     int stride = 0;
 
-    // find max of the histogram    
+    // find max of the histogram
     float max_h = 0.0f;
-    for (int i = 0; i < histSize; i++) 
-        if (histogram[i] > max_h) 
+    for (int i = 0; i < histSize; i++)
+        if (histogram[i] > max_h)
             max_h = histogram[i];
 
     // scale histogram to fit in the image
     int *histogram_scaled = (int *)malloc(histSize * sizeof(int));
-    for (int i = 0; i < histSize; i++) 
+    for (int i = 0; i < histSize; i++)
         histogram_scaled[i] = (int)((float)histogram[i] / max_h * HEIGHT);
-    
-    // Create a new PPM image: canvas for the histogram 
+
+    // Create a new PPM image: canvas for the histogram
     PPM *ppm_h = ppm_make(WIDTH, HEIGHT, (pel){150, 150, 150});
 
     // Draw histogram bars for R
@@ -336,7 +347,7 @@ void ppm_save_histogram(int *histogram, const char *filename) {
         for (int y = HEIGHT; y >=  HEIGHT-barHeight; y--) {
             ppm_set(ppm_h, 3*i+1, y, (pel){255, 0, 0});
             ppm_set(ppm_h, 3*i+2, y, (pel){255, 0, 0});
-        }   
+        }
         // make green bars
         barHeight = histogram_scaled[i+256];
         for (int y = HEIGHT; y >=  HEIGHT-barHeight; y--) {
@@ -346,7 +357,7 @@ void ppm_save_histogram(int *histogram, const char *filename) {
         }
         // make blue bars
         barHeight = histogram_scaled[i+512];
-        for (int y = HEIGHT; y >=  HEIGHT-barHeight; y--) { 
+        for (int y = HEIGHT; y >=  HEIGHT-barHeight; y--) {
             stride = 6*256;
             ppm_set(ppm_h, 3*i+1+stride, y, (pel){0, 0, 255});
             ppm_set(ppm_h, 3*i+2+stride, y, (pel){0, 0, 255});
@@ -359,10 +370,10 @@ void ppm_save_histogram(int *histogram, const char *filename) {
 }
 
 
-/* 
+/*
 * Color frequencies in the PPM image
 */
-int ppm_freq_color(PPM *ppm, pel c) {    
+int ppm_freq_color(PPM *ppm, pel c) {
     int count = 0;
 
     // count the number of pixels for each color
