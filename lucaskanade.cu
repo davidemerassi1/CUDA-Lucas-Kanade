@@ -1,148 +1,21 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "../../GPUcomputing/utils/PPM/ppm.h"
+#include "libs/ppm.h"
+#include "libs/pgm.h"
 
 #define max_features 1000
-
-typedef struct {
-    int width, height, maxval;
-    unsigned char *image;
-} PGM;
-
-PGM* read_pgm(const char* filename) {
-    FILE* f = fopen(filename, "rb");
-    if (!f) { perror("Errore apertura file"); return NULL; }
-
-    //L'intestazione di un PGM è una riga <pgm_type, width, height, maxColor (in genere 255)>
-    char format[3];
-    int maxval;
-    int width, height;
-    fscanf(f, "%2s\n%d %d\n%d\n", format, &width, &height, &maxval);
-
-    PGM *pgm = (PGM*)malloc(sizeof(PGM));
-    pgm->width = width;
-    pgm->height = height;
-    pgm->maxval = maxval;
-    pgm->image = (color*)malloc(width * height * sizeof(color));
-    fread(pgm->image, 1, width * height, f);
-    fclose(f);
-    return pgm;
-}
-
-PPM* pgm_to_ppm(PGM* pgm_image) {
-    pel bg = {0,0,0};
-    PPM* ppm_image = ppm_make(pgm_image->width, pgm_image->height, bg);
-    for(int y=0;y<pgm_image->height;y++){
-        for(int x=0;x<pgm_image->width;x++){
-            unsigned char g = pgm_image->image[y * pgm_image->width + x];
-            pel c = {g, g, g};       // R=G=B = intensità del PGM
-            ppm_set(ppm_image, x, y, c);
-        }
-    }
-    return ppm_image;
-}
-
-PGM* pgm_make(int width, int height) {
-    PGM* pgm = (PGM*)malloc(sizeof(PGM));
-    if (!pgm) {
-        perror("malloc PGM failed");
-        return NULL;
-    }
-
-    pgm->width  = width;
-    pgm->height = height;
-    pgm->maxval = 255; // tipico per PGM
-    pgm->image  = (unsigned char*)malloc(width * height * sizeof(unsigned char));
-    if (!pgm->image) {
-        perror("malloc PGM image failed");
-        free(pgm);
-        return NULL;
-    }
-
-    // opzionale: inizializza a zero
-    for (int i = 0; i < width * height; i++)
-        pgm->image[i] = 0;
-
-    return pgm;
-}
-
-unsigned char pgm_gaussKernel(PGM *pgm, int x, int y, int MASK_SIZE, float *mask) {
-    float sum = 0;
-    int RADIUS = MASK_SIZE / 2;
-    for (int r = 0; r < MASK_SIZE; r++) {
-        for (int c = 0; c < MASK_SIZE; c++) {
-            int row = y + r - RADIUS;
-            int col = x + c - RADIUS;
-            if (row >= 0 && row < pgm->height && col >= 0 && col < pgm->width) {
-                float m = mask[r * MASK_SIZE + c];
-                unsigned char p = pgm->image[row * pgm->width + col];
-                sum += p * m;
-            }
-        }
-    }
-    // clamp
-    if (sum < 0) sum = 0;
-    if (sum > 255) sum = 255;
-    return (unsigned char)sum;
-}
-
-void pgm_gaussFilter(PGM *pgm, PGM *pgm_filtered, int MASK_SIZE, float SIGMA) {
-    float *mask = gaussMask(MASK_SIZE, SIGMA);
-    for (int y = 0; y < pgm->height; y++) {
-        for (int x = 0; x < pgm->width; x++) {
-            pgm_filtered->image[y * pgm->width + x] = pgm_gaussKernel(pgm, x, y, MASK_SIZE, mask);
-        }
-    }
-    free(mask);
-}
 
 typedef struct {
     float x;
     float y;
     int active;
 } Feature;
+
 typedef struct {
     float val;      // Lo score di Shi-Tomasi
-    Feature feat;   // La feature associata (con x, y, active)
+    Feature feat;
 } ScoredFeature;
-
-float compute_shi_tomasi_score(PGM *pgm, int x, int y, int window_size) {
-    float sumIx2 = 0, sumIy2 = 0, sumIxIy = 0;
-    int half = window_size / 2;
-    int w = pgm->width;
-    unsigned char *img = pgm->image;
-
-    for (int i = -half; i <= half; i++) {
-        for (int j = -half; j <= half; j++) {
-            int px = x + j;
-            int py = y + i;
-
-            //gradiente x
-            float Ix =
-                -1 * img[(py-1)*w + (px-1)] + 1 * img[(py-1)*w + (px+1)] +
-                -2 * img[(py)*w   + (px-1)] + 2 * img[(py)*w   + (px+1)] +
-                -1 * img[(py+1)*w + (px-1)] + 1 * img[(py+1)*w + (px+1)];
-
-            //gradiente y
-            float Iy =
-                -1 * img[(py-1)*w + (px-1)] - 2 * img[(py-1)*w + px] - 1 * img[(py-1)*w + (px+1)] +
-                 1 * img[(py+1)*w + (px-1)] + 2 * img[(py+1)*w + px] + 1 * img[(py+1)*w + (px+1)];
-
-            sumIx2 += Ix * Ix;
-            sumIy2 += Iy * Iy;
-            sumIxIy += Ix * Iy;
-        }
-    }
-
-    
-    float trace = sumIx2 + sumIy2;
-    float det = sumIx2 * sumIy2 - sumIxIy * sumIxIy;
-    float term = sqrtf((trace * trace / 4.0f) - det);
-    float lambda2 = (trace / 2.0f) - term;
-
-    return lambda2;
-}
 
 void downsample_half(PGM *src, PGM *dst) {
     for (int y = 0; y < dst->height; y++) {
@@ -176,6 +49,42 @@ int compare_scored_features(const void *a, const void *b) {
     if (f1->val < f2->val) return 1;
     if (f1->val > f2->val) return -1;
     return 0;
+}
+
+float compute_shi_tomasi_score(PGM *pgm, int x, int y, int window_size) {
+    float sumIx2 = 0, sumIy2 = 0, sumIxIy = 0;
+    int half = window_size / 2;
+    int w = pgm->width;
+    unsigned char *img = pgm->image;
+
+    for (int i = -half; i <= half; i++) {
+        for (int j = -half; j <= half; j++) {
+            int px = x + j;
+            int py = y + i;
+
+            //gradiente x
+            float Ix =
+                -1 * img[(py-1)*w + (px-1)] + 1 * img[(py-1)*w + (px+1)] +
+                -2 * img[(py)*w   + (px-1)] + 2 * img[(py)*w   + (px+1)] +
+                -1 * img[(py+1)*w + (px-1)] + 1 * img[(py+1)*w + (px+1)];
+
+            //gradiente y
+            float Iy =
+                -1 * img[(py-1)*w + (px-1)] - 2 * img[(py-1)*w + px] - 1 * img[(py-1)*w + (px+1)] +
+                 1 * img[(py+1)*w + (px-1)] + 2 * img[(py+1)*w + px] + 1 * img[(py+1)*w + (px+1)];
+
+            sumIx2 += Ix * Ix;
+            sumIy2 += Iy * Iy;
+            sumIxIy += Ix * Iy;
+        }
+    }
+
+    float trace = sumIx2 + sumIy2;
+    float det = sumIx2 * sumIy2 - sumIxIy * sumIxIy;
+    float term = sqrtf((trace * trace / 4.0f) - det);
+    float lambda2 = (trace / 2.0f) - term;
+
+    return lambda2;
 }
 
 int find_good_features(PGM* pgm, Feature* features) {
@@ -262,7 +171,6 @@ int main(void) {
     PPM* converted = pgm_to_ppm(frame1);
     draw_features(converted, h_features, num_features);
     ppm_write(converted, make_output_filename(1));
-
 
     return 0;
 }
