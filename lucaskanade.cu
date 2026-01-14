@@ -4,7 +4,9 @@
 #include "libs/ppm.h"
 #include "libs/pgm.h"
 
-#define max_features 1000
+#define MAX_FEATURES 1000
+#define PYRAMID_LEVELS 3
+#define FIRST_ANALYSIS_LEVEL 2
 
 typedef struct {
     float x;
@@ -54,7 +56,7 @@ void scale_features(Feature* features, int numFeatures, float multiplier) {
 bool is_too_close(int x1, int x2, int y1, int y2) {
     int dx = x1 - x2;
     int dy = y1 - y2;
-    return dx*dx + dy*dy < 100;
+    return dx*dx + dy*dy < (200 / pow(2, FIRST_ANALYSIS_LEVEL));
 }
 
 int compare_scored_features(const void *a, const void *b) {
@@ -101,7 +103,7 @@ float compute_shi_tomasi_score(PGM *pgm, int x, int y, int window_size) {
     return lambda2;
 }
 
-int find_good_features(PGM* pgm, Feature* features) {
+int find_good_features(PGM* pgm, Feature* features, int max_features) {
     ScoredFeature *scored_features = (ScoredFeature*) malloc(pgm->height * pgm->width * sizeof(ScoredFeature));
     int count=0;
 
@@ -178,12 +180,9 @@ float get_pixel_bilinear(PGM *img, float x, float y) {
     int x2 = x1 + 1;
     int y2 = y1 + 1;
 
-    // Calcoliamo i pesi (quanto siamo lontani dai bordi del pixel)
     float dx = x - (float)x1;
     float dy = y - (float)y1;
 
-    // Recuperiamo i valori dei 4 pixel vicini
-    // Nota: bisognerebbe controllare che x2 e y2 non escano dai bordi dell'immagine
     unsigned char p11 = img->image[y1 * img->width + x1];
     unsigned char p21 = img->image[y1 * img->width + x2];
     unsigned char p12 = img->image[y2 * img->width + x1];
@@ -199,14 +198,14 @@ float get_pixel_bilinear(PGM *img, float x, float y) {
 }
 
 void track_features(PGM *img1, PGM *img2, Feature *features, int num_features) {
-    int window_size = 11; // Una finestra 11x11 è ottima per gestire pattern puntinati
+    int window_size = 11;
     int half = window_size / 2;
     int max_iterations = 10;
 
     for (int f = 0; f < num_features; f++) {
         if (!features[f].active) continue;
 
-        float u = 0, v = 0; // Spostamento iniziale (ipotesi di zero movimento)
+        float u = 0, v = 0;
         float curr_x = features[f].x;
         float curr_y = features[f].y;
 
@@ -220,18 +219,14 @@ void track_features(PGM *img1, PGM *img2, Feature *features, int num_features) {
                     float px = curr_x + j;
                     float py = curr_y + i;
 
-                    // Coordinate nel secondo frame (traslate dallo shift u,v)
                     float nx = px + u;
                     float ny = py + v;
 
-                    // Controllo bordi per evitare crash con l'interpolazione
                     if (nx < 1 || nx >= img2->width - 1 || ny < 1 || ny >= img2->height - 1) continue;
 
-                    // 1. Calcolo gradienti spaziali (su frame 1)
                     float Ix = (get_pixel_bilinear(img1, px + 1, py) - get_pixel_bilinear(img1, px - 1, py)) * 0.5f;
                     float Iy = (get_pixel_bilinear(img1, px, py + 1) - get_pixel_bilinear(img1, px, py - 1)) * 0.5f;
 
-                    // 2. Calcolo differenza temporale (I2_nuovo - I1_vecchio)
                     float It = get_pixel_bilinear(img2, nx, ny) - get_pixel_bilinear(img1, px, py);
                     sumIx2 += Ix * Ix;
                     sumIy2 += Iy * Iy;
@@ -241,11 +236,11 @@ void track_features(PGM *img1, PGM *img2, Feature *features, int num_features) {
                 }
             }
 
-            // 3. Risoluzione del sistema lineare 2x2 (Regola di Cramer)
+            // Regola di Cramer
             float det = sumIx2 * sumIy2 - sumIxIy * sumIxIy;
 
-            if (fabs(det) < 0.001f) { 
-                features[f].active = 0; // Punto perso: zona troppo piatta o ambigua
+            if (fabs(det) < 0.001f) {
+                features[f].active = 0;
                 break;
             }
 
@@ -264,58 +259,72 @@ void track_features(PGM *img1, PGM *img2, Feature *features, int num_features) {
         features[f].y += v;
 
         // Controllo finale: se la feature è uscita dall'immagine, disattivala
-        if (features[f].x < 0 || features[f].x >= img2->width || 
+        if (features[f].x < 0 || features[f].x >= img2->width ||
             features[f].y < 0 || features[f].y >= img2->height) {
             features[f].active = 0;
         }
     }
 }
 
+void build_pyramid(PGM* frame, PGM** pyramid, int levels) {
+    // Il livello 0 è il frame originale
+    pyramid[0] = pgm_copy(frame);
+    for (int l = 1; l < levels; l++) {
+        //ogni livello successivo è una versione grande la metà e con un blur (eseguito prima di scalare)
+        PGM* blurred_prev = pgm_make(pyramid[l-1]->width, pyramid[l-1]->height);
+        pgm_gaussFilter(pyramid[l-1], blurred_prev, 5, 1.0);
+        pyramid[l] = pgm_make(pyramid[l-1]->width / 2, pyramid[l-1]->height / 2);
+        downsample_half(blurred_prev, pyramid[l]);
+        pgm_free(blurred_prev);
+    }
+}
+
+void track_features_pyramidal(PGM** pyr1, PGM** pyr2, Feature* feats, int n) {
+    //scale = 1 / (2^(l-1))
+    float initial_scale = 1.0f / powf(2.0f, PYRAMID_LEVELS - 1);
+    scale_features(feats, n, initial_scale);
+    for (int l = PYRAMID_LEVELS - 1; l >= 0; l--) {
+        track_features(pyr1[l], pyr2[l], feats, n);
+        if (l > 0) {
+            scale_features(feats, n, 2.0f);
+        }
+    }
+}
+
 int main(void) {
     PGM* frame1 = read_pgm(make_input_filename(1));
-    PGM* frame1_downsampled = pgm_make(frame1->width/2, frame1->height/2);
-    downsample_half(frame1, frame1_downsampled);
-    PGM* frame1_blur = pgm_make(frame1_downsampled->width, frame1_downsampled->height);
-    int KERNEL_SIZE = 5;   // dimensione finestra
-    float SIGMA = 1.2;    // deviazione standard
-    pgm_gaussFilter(frame1_downsampled, frame1_blur, KERNEL_SIZE, SIGMA);
-    Feature* h_features = (Feature*)malloc(max_features*sizeof(Feature));
-    int num_features = find_good_features(frame1_blur, h_features);
-    scale_features(h_features, num_features, 2);
+    PGM* frame1_pyramid[PYRAMID_LEVELS]; //il primo livello equivarrà a frame1
+    build_pyramid(frame1, frame1_pyramid, PYRAMID_LEVELS);
+    Feature* h_features = (Feature*)malloc(MAX_FEATURES*sizeof(Feature));
+    //Vengono cercate le feature sul primo frame. Conviene usare la versione già filtrata 
+    int num_features = find_good_features(frame1_pyramid[FIRST_ANALYSIS_LEVEL], h_features, MAX_FEATURES);
+    scale_features(h_features, num_features, pow(2, FIRST_ANALYSIS_LEVEL));
     PPM* converted = pgm_to_ppm(frame1);
     draw_features(converted, h_features, num_features);
     ppm_write(converted, make_output_filename(1));
     ppm_free(converted);
-
     PGM* frame2;
     int t = 2;
     while (true) {
       frame2 = read_pgm(make_input_filename(t));
-      if (frame2 == NULL) 
+      if (frame2 == NULL)
           break;
-      //Nella versione finale bisogna usare blur su gpu o piramidi di gauss
-      //oppure fare blur solo intorno a ciascuna feature
-      PGM* frame2_downsampled = pgm_make(frame2->width/2, frame2->height/2);
-      downsample_half(frame2, frame2_downsampled);
-      PGM* frame2_blur = pgm_make(frame2_downsampled->width, frame2_downsampled->height);
-      pgm_gaussFilter(frame2_downsampled, frame2_blur, KERNEL_SIZE, SIGMA);
-      //PGM* frame2_blur = pgm_copy(frame2);
-      scale_features(h_features, num_features, 0.5);
-      track_features(frame1_blur, frame2_blur, h_features, num_features);
-      scale_features(h_features, num_features, 2);
+      PGM* frame2_pyramid[PYRAMID_LEVELS];
+      //Generazione della piramide di Gauss per i frame successivi (blur + scalatura)
+      build_pyramid(frame2, frame2_pyramid, PYRAMID_LEVELS);
+      //PGM* frame2_pyramid = pgm_copy(frame2);
+      //tracciamento con Lucas-Kanade
+      track_features_pyramidal(frame1_pyramid, frame2_pyramid, h_features, num_features);
       PPM* out = pgm_to_ppm(frame2);
       draw_features(out, h_features, num_features);
       ppm_write(out, make_output_filename(t));
-
-      pgm_free(frame1);
-      pgm_free(frame1_downsampled);
-      pgm_free(frame1_blur);
-      frame1 = frame2;
-      frame1_downsampled = frame2_downsampled;
-      frame1_blur = frame2_blur;
       ppm_free(out);
+      for(int l=0; l < PYRAMID_LEVELS; l++) {
+        pgm_free(frame1_pyramid[l]);
+        frame1_pyramid[l] = frame2_pyramid[l];
+      }
+      frame1 = frame2;
       t++;
     }
-
     return 0;
 }
